@@ -1,27 +1,44 @@
 # Robot Touch Test
 
-Aplicativo Android para validar toques do robô em uma tela real. A primeira
-versão apresenta três alvos fixos: uma bola vermelha, uma azul e uma verde.
-Um toque completo dentro de uma bola mostra sucesso, vibra o telefone e grava
-o alvo, a coordenada normalizada e o horário no armazenamento local do app.
+An Android application for repeatable touch-accuracy experiments. Every spawn displays one or more complete red, green, and blue target trios at the same time.
 
-## Abrir e instalar
+The app opens directly in a fixed-position test by default. Use **Settings** to choose the number of RGB trios, switch between fixed and random positions, independently enable random sizes, and set the radius range.
 
-1. Abra esta pasta no Android Studio.
-2. Aceite a instalação do Android SDK API 36 quando o Android Studio solicitar.
-3. Conecte um Motorola com depuração USB ativada.
-4. Use **Run** para instalar o app.
+## Run
 
-Pela linha de comando, após configurar o Android SDK:
+1. Open this directory in Android Studio.
+2. Install Android SDK API 36 if prompted.
+3. Connect an Android device with USB debugging enabled.
+4. Select **Run**.
+
+From a terminal with the Android SDK configured:
 
 ```bash
 ./gradlew installDebug
 ```
 
-## Próximas extensões
+## Saved data
 
-- tamanho dos alvos como nível de dificuldade;
-- posições aleatórias com semente registrada;
-- tela de configurações;
-- exportação dos eventos em JSON ou CSV;
-- modo de teste controlado por ROS/HTTP, se necessário.
+Each touch attempt is synchronously appended as one JSON object per line to:
+
+```text
+<app internal files directory>/touch_results.jsonl
+```
+
+On a typical device the full path is `/data/user/0/com.pcgr.robottouchtest/files/touch_results.jsonl`. Android protects this app-private directory. Use **Settings → Results and Data** to export the records as a JSON array or CSV through Android's document picker.
+
+Each record contains:
+
+- `event_id`, `session_id`, `test_id`, `date_time`, and `test_mode`
+- `screen_width` and `screen_height` in pixels
+- `target_id`, center coordinates, radius in pixels and dp, diameter in pixels, and target color
+- actual touch coordinates
+- `inside_target`, `result`, `distance_to_center`, `response_time_ms`, and `timed_out`
+- `previous_attempts_in_session`
+- `configuration`, a complete nested snapshot of the settings used for the test
+
+Files exported by the JSON action can be imported again. Existing records with the same `event_id` are not duplicated. Deleting sessions and clearing all data require confirmation.
+
+## Built-in validation check
+
+At startup, a small self-check verifies RGB trio counts, radius ranges, non-overlapping target placement, screen bounds, and hit/miss calculation.
