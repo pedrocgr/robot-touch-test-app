@@ -4,9 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.os.Handler
 import android.os.Build
-import android.os.Looper
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
@@ -19,24 +17,25 @@ class RobotTouchTestView(
     context: Context,
     private val config: TestConfig,
     private val onFinished: (SessionResult) -> Unit,
+    private val onOperatorAction: (label: String, enabled: Boolean) -> Unit,
 ) : View(context) {
-    data class SessionResult(val sessionId: String, val hits: Int, val misses: Int, val averageResponseMs: Long)
+    data class SessionResult(
+        val sessionId: String,
+        val targetCount: Int,
+        val hits: Int,
+        val misses: Int,
+        val averageResponseMs: Long,
+    )
 
     private val store = TouchDataStore(context)
     private val density = resources.displayMetrics.density
     private val sessionId = UUID.randomUUID().toString()
     private val testId = UUID.randomUUID().toString()
-    private val handler = Handler(Looper.getMainLooper())
     private val textPaint = paint(Color.rgb(24, 33, 45), 18f)
     private val statusPaint = paint(Color.rgb(21, 101, 192), 16f)
     private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
-        style = Paint.Style.STROKE
-        strokeWidth = 4 * density
-    }
     private var targets = emptyList<CircleTarget>()
-    private var currentIndex = 0
+    private val completedTargetIds = mutableSetOf<String>()
     private var current: CircleTarget? = null
     private var appearedAt = 0L
     private var hits = 0
@@ -44,53 +43,57 @@ class RobotTouchTestView(
     private var totalResponseMs = 0L
     private var previousResult = "No previous touch"
     private var finished = false
-    private var pressed = false
-    private var downTarget: CircleTarget? = null
-    private val timeout = Runnable { current?.let { complete(it, null, null, true) } }
+    private var awaitingManualAdvance = false
+    private var pressedTarget: CircleTarget? = null
 
     init {
         isFocusable = true
-        contentDescription = "Touch test area"
+        contentDescription = "Robot touch test area"
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         if (targets.isNotEmpty() || width == 0 || height == 0) return
-        targets = TouchTestLogic.generateTargets(config, width, height, density, 120 * density, height - 24 * density)
+        targets = TouchTestLogic.generateTargets(
+            config, width, height, density, 120 * density, height - 96 * density,
+        )
         showNext()
     }
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(Color.rgb(247, 248, 250))
-        canvas.drawText("Target ${minOf(currentIndex + 1, config.targetCount)} of ${config.targetCount}", width / 2f, 40 * density, textPaint)
-        canvas.drawText(previousResult, width / 2f, 72 * density, statusPaint)
         val target = current
-        if (target == null) {
-            canvas.drawText("Get ready…", width / 2f, height / 2f, statusPaint)
-        } else {
-            targetPaint.color = target.color
-            targetPaint.alpha = if (pressed) 170 else 255
-            canvas.drawCircle(target.x, target.y, target.radius, targetPaint)
-            canvas.drawCircle(target.x, target.y, target.radius, outlinePaint)
+        val progress = if (finished) targets.size else completedTargetIds.size + 1
+        canvas.drawText("Target $progress of ${targets.size}", width / 2f, 40 * density, textPaint)
+        canvas.drawText(previousResult, width / 2f, 72 * density, statusPaint)
+        targets.forEach { circle ->
+            targetPaint.color = circle.color
+            targetPaint.alpha = if (circle === pressedTarget) 170 else 255
+            canvas.drawCircle(circle.x, circle.y, circle.radius, targetPaint)
         }
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val target = current ?: return true
+        if (awaitingManualAdvance) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downTarget = target
-                pressed = TouchTestLogic.isHit(target, event.x, event.y)
+                pressedTarget = targets
+                    .asSequence()
+                    .filter { it.id !in completedTargetIds }
+                    .firstOrNull { TouchTestLogic.isHit(it, event.x, event.y) }
                 invalidate()
             }
             MotionEvent.ACTION_UP -> {
-                pressed = false
+                pressedTarget = null
                 performClick()
-                if (downTarget === target) complete(target, event.x, event.y, false)
-                downTarget = null
+                val touchedTarget = targets
+                    .asSequence()
+                    .filter { it.id !in completedTargetIds }
+                    .firstOrNull { TouchTestLogic.isHit(it, event.x, event.y) }
+                complete(touchedTarget ?: nearestRemainingTarget(event.x, event.y), event.x, event.y, noTouch = false)
             }
             MotionEvent.ACTION_CANCEL -> {
-                pressed = false
-                downTarget = null
+                pressedTarget = null
                 invalidate()
             }
         }
@@ -102,32 +105,53 @@ class RobotTouchTestView(
         return true
     }
 
+    /** Called by the operator button outside the test surface. */
+    fun operatorAdvance() {
+        val target = current ?: return
+        if (awaitingManualAdvance) {
+            awaitingManualAdvance = false
+            completedTargetIds += target.id
+            showNext()
+        } else {
+            complete(target, null, null, noTouch = true)
+        }
+    }
+
     private fun showNext() {
-        if (currentIndex >= targets.size) {
+        if (completedTargetIds.size >= targets.size) {
             finished = true
-            onFinished(SessionResult(sessionId, hits, misses, if (hits + misses == 0) 0 else totalResponseMs / (hits + misses)))
+            current = null
+            onOperatorAction("", false)
+            onFinished(SessionResult(
+                sessionId, targets.size, hits, misses,
+                if (hits + misses == 0) 0 else totalResponseMs / (hits + misses),
+            ))
             return
         }
-        current = targets[currentIndex]
+        current = targets.first { it.id !in completedTargetIds }
         appearedAt = SystemClock.elapsedRealtime()
-        if (config.timeoutMs > 0) handler.postDelayed(timeout, config.timeoutMs)
+        onOperatorAction("No touch / next", true)
         invalidate()
         sendAccessibilityEvent(AccessibilityEvent.TYPE_ANNOUNCEMENT)
     }
 
-    private fun complete(target: CircleTarget, touchX: Float?, touchY: Float?, timedOut: Boolean) {
-        if (target !== current || finished) return
-        handler.removeCallbacks(timeout)
+    private fun complete(target: CircleTarget, touchX: Float?, touchY: Float?, noTouch: Boolean) {
+        if (target.id in completedTargetIds || finished) return
         val responseMs = SystemClock.elapsedRealtime() - appearedAt
         val distance = if (touchX == null || touchY == null) null else TouchTestLogic.distance(target, touchX, touchY)
         val hit = distance != null && distance <= target.radius
+        val result = when {
+            hit -> "hit"
+            noTouch -> "no_touch"
+            else -> "miss"
+        }
         if (hit) {
             hits++
             previousResult = "Previous touch: HIT"
             performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
         } else {
             misses++
-            previousResult = if (timedOut) "Previous target: TIMEOUT" else "Previous touch: MISS"
+            previousResult = if (noTouch) "Previous target: NO TOUCH" else "Previous touch: MISS"
         }
         totalResponseMs += responseMs
         contentDescription = previousResult
@@ -136,7 +160,7 @@ class RobotTouchTestView(
             put("session_id", sessionId)
             put("test_id", testId)
             put("date_time", TouchDataStore.now())
-            put("test_mode", config.mode.label)
+            put("test_mode", config.modeLabel)
             put("screen_width", width)
             put("screen_height", height)
             put("target_id", target.id)
@@ -149,24 +173,30 @@ class RobotTouchTestView(
             put("actual_touch_x", touchX ?: JSONObject.NULL)
             put("actual_touch_y", touchY ?: JSONObject.NULL)
             put("inside_target", hit)
-            put("result", if (hit) "hit" else "miss")
+            put("result", result)
             put("distance_to_center", distance ?: JSONObject.NULL)
             put("response_time_ms", responseMs)
-            put("previous_attempts_in_session", currentIndex)
-            put("timed_out", timedOut)
+            put("previous_attempts_in_session", completedTargetIds.size)
+            put("timed_out", false)
             put("configuration", config.toJson())
         })
-        current = null
-        downTarget = null
-        currentIndex++
-        invalidate()
-        handler.postDelayed(::showNext, config.delayMs)
+
+        if (hit || noTouch) {
+            completedTargetIds += target.id
+            showNext()
+        } else {
+            current = target
+            awaitingManualAdvance = true
+            onOperatorAction("Continue after miss", true)
+            invalidate()
+        }
     }
 
-    override fun onDetachedFromWindow() {
-        handler.removeCallbacksAndMessages(null)
-        super.onDetachedFromWindow()
-    }
+    private fun nearestRemainingTarget(x: Float, y: Float): CircleTarget =
+        targets
+            .asSequence()
+            .filter { it.id !in completedTargetIds }
+            .minBy { TouchTestLogic.distance(it, x, y) }
 
     private fun paint(color: Int, textSizeSp: Float) = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         this.color = color

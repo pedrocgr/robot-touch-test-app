@@ -1,8 +1,10 @@
 # Robot Touch Test
 
-An Android application for repeatable touch-accuracy experiments. Every spawn displays one or more complete red, green, and blue target trios at the same time.
+An Android application for repeatable touch-accuracy experiments. Every batch displays one or more complete red, green, and blue target trios at the same time. The white outline marks the target currently expected from the robot.
 
 The app opens directly in a fixed-position test by default. Use **Settings** to choose the number of RGB trios, switch between fixed and random positions, independently enable random sizes, and set the radius range.
+
+There is no automatic timeout. Every remaining target can be touched in any order. A registered Android touch is recorded as a hit or miss. After a miss, use **Continue after miss** to skip that target. If the robot never produces an Android touch, use **No touch / next**; the app records `result: "no_touch"`, null touch coordinates, and `timed_out: false`. The target layout remains on screen for the whole batch so the DENSO vision node can observe the complete RGB trio.
 
 ## Run
 

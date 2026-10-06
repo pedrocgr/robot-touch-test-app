@@ -110,12 +110,21 @@ class MainActivity : Activity() {
         }.exceptionOrNull()?.message
         if (error != null) return message("Cannot start test", error)
         screen = Screen.TEST
-        val test = RobotTouchTestView(this, config, ::showFinalSummary)
+        lateinit var operatorButton: Button
+        val test = RobotTouchTestView(this, config, ::showFinalSummary) { label, enabled ->
+            operatorButton.text = label
+            operatorButton.isEnabled = enabled
+            operatorButton.visibility = if (enabled) View.VISIBLE else View.GONE
+        }
+        operatorButton = button("No touch / next") { test.operatorAdvance() }
         setContentView(FrameLayout(this).apply {
             addView(test, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(button("Settings") { showSettings() }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {
                 topMargin = dp(32)
                 marginEnd = dp(8)
+            })
+            addView(operatorButton, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                bottomMargin = dp(96)
             })
         })
     }
