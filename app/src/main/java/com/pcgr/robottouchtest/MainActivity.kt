@@ -116,7 +116,7 @@ class MainActivity : Activity() {
             operatorButton.isEnabled = enabled
             operatorButton.visibility = if (enabled) View.VISIBLE else View.GONE
         }
-        operatorButton = button("No touch / next") { test.operatorAdvance() }
+        operatorButton = button("Continue after miss") { test.operatorAdvance() }
         setContentView(FrameLayout(this).apply {
             addView(test, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(button("Settings") { showSettings() }, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END).apply {

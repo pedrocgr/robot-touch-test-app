@@ -164,8 +164,8 @@ class TouchDataStore(context: Context) {
         val fields = listOf(
             "event_id", "session_id", "test_id", "date_time", "test_mode", "screen_width", "screen_height",
             "target_id", "target_center_x", "target_center_y", "target_radius", "target_radius_dp", "target_diameter", "target_color", "actual_touch_x",
-            "actual_touch_y", "inside_target", "result", "distance_to_center", "response_time_ms",
-            "previous_attempts_in_session", "timed_out", "configuration",
+            "actual_touch_y", "inside_target", "result", "target_already_completed", "distance_to_center", "response_time_ms",
+            "previous_attempts_in_session", "timed_out", "configuration", "imu",
         )
         fun csv(value: Any?): String = "\"${(value ?: "").toString().replace("\"", "\"\"")}\""
         return buildString {

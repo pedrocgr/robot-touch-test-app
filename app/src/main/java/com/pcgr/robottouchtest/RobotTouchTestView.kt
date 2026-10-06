@@ -28,6 +28,7 @@ class RobotTouchTestView(
     )
 
     private val store = TouchDataStore(context)
+    private val imu = ImuSampler(context)
     private val density = resources.displayMetrics.density
     private val sessionId = UUID.randomUUID().toString()
     private val testId = UUID.randomUUID().toString()
@@ -41,14 +42,24 @@ class RobotTouchTestView(
     private var hits = 0
     private var misses = 0
     private var totalResponseMs = 0L
+    private var touchAttempts = 0
     private var previousResult = "No previous touch"
     private var finished = false
-    private var awaitingManualAdvance = false
     private var pressedTarget: CircleTarget? = null
 
     init {
         isFocusable = true
         contentDescription = "Robot touch test area"
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        imu.start()
+    }
+
+    override fun onDetachedFromWindow() {
+        imu.stop()
+        super.onDetachedFromWindow()
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -61,9 +72,8 @@ class RobotTouchTestView(
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(Color.rgb(247, 248, 250))
-        val target = current
-        val progress = if (finished) targets.size else completedTargetIds.size + 1
-        canvas.drawText("Target $progress of ${targets.size}", width / 2f, 40 * density, textPaint)
+        val remaining = targets.size - completedTargetIds.size
+        canvas.drawText("Remaining: $remaining of ${targets.size} · Touches: $touchAttempts", width / 2f, 40 * density, textPaint)
         canvas.drawText(previousResult, width / 2f, 72 * density, statusPaint)
         targets.forEach { circle ->
             targetPaint.color = circle.color
@@ -74,12 +84,10 @@ class RobotTouchTestView(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val target = current ?: return true
-        if (awaitingManualAdvance) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 pressedTarget = targets
                     .asSequence()
-                    .filter { it.id !in completedTargetIds }
                     .firstOrNull { TouchTestLogic.isHit(it, event.x, event.y) }
                 invalidate()
             }
@@ -88,7 +96,6 @@ class RobotTouchTestView(
                 performClick()
                 val touchedTarget = targets
                     .asSequence()
-                    .filter { it.id !in completedTargetIds }
                     .firstOrNull { TouchTestLogic.isHit(it, event.x, event.y) }
                 complete(touchedTarget ?: nearestRemainingTarget(event.x, event.y), event.x, event.y, noTouch = false)
             }
@@ -107,37 +114,34 @@ class RobotTouchTestView(
 
     /** Called by the operator button outside the test surface. */
     fun operatorAdvance() {
-        val target = current ?: return
-        if (awaitingManualAdvance) {
-            awaitingManualAdvance = false
+        endBatch("Batch ended: remaining targets recorded as NO TOUCH")
+    }
+
+    private fun endBatch(message: String) {
+        if (finished) return
+        targets.filter { it.id !in completedTargetIds }.forEach { target ->
+            record(target, null, null, "no_touch")
             completedTargetIds += target.id
-            showNext()
-        } else {
-            complete(target, null, null, noTouch = true)
         }
+        previousResult = message
+        finishSession()
     }
 
     private fun showNext() {
         if (completedTargetIds.size >= targets.size) {
-            finished = true
-            current = null
-            onOperatorAction("", false)
-            onFinished(SessionResult(
-                sessionId, targets.size, hits, misses,
-                if (hits + misses == 0) 0 else totalResponseMs / (hits + misses),
-            ))
+            finishSession()
             return
         }
         current = targets.first { it.id !in completedTargetIds }
         appearedAt = SystemClock.elapsedRealtime()
-        onOperatorAction("No touch / next", true)
+        onOperatorAction("Continue after miss", true)
         invalidate()
         sendAccessibilityEvent(AccessibilityEvent.TYPE_ANNOUNCEMENT)
     }
 
     private fun complete(target: CircleTarget, touchX: Float?, touchY: Float?, noTouch: Boolean) {
-        if (target.id in completedTargetIds || finished) return
-        val responseMs = SystemClock.elapsedRealtime() - appearedAt
+        if (finished) return
+        val targetAlreadyCompleted = target.id in completedTargetIds
         val distance = if (touchX == null || touchY == null) null else TouchTestLogic.distance(target, touchX, touchY)
         val hit = distance != null && distance <= target.radius
         val result = when {
@@ -145,16 +149,40 @@ class RobotTouchTestView(
             noTouch -> "no_touch"
             else -> "miss"
         }
+        touchAttempts++
         if (hit) {
-            hits++
-            previousResult = "Previous touch: HIT"
+            previousResult = if (targetAlreadyCompleted) {
+                "Previous touch: REPEATED HIT"
+            } else {
+                "Previous touch: HIT"
+            }
             performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
         } else {
-            misses++
             previousResult = if (noTouch) "Previous target: NO TOUCH" else "Previous touch: MISS"
         }
-        totalResponseMs += responseMs
+        record(target, touchX, touchY, result, targetAlreadyCompleted)
         contentDescription = previousResult
+
+        if (hit && !targetAlreadyCompleted) {
+            completedTargetIds += target.id
+            showNext()
+        } else {
+            invalidate()
+        }
+    }
+
+    private fun record(
+        target: CircleTarget,
+        touchX: Float?,
+        touchY: Float?,
+        result: String,
+        targetAlreadyCompleted: Boolean = false,
+    ) {
+        val responseMs = SystemClock.elapsedRealtime() - appearedAt
+        val distance = if (touchX == null || touchY == null) null else TouchTestLogic.distance(target, touchX, touchY)
+        val hit = result == "hit"
+        if (hit) hits++ else misses++
+        totalResponseMs += responseMs
         store.append(JSONObject().apply {
             put("event_id", TouchDataStore.newEventId())
             put("session_id", sessionId)
@@ -174,22 +202,25 @@ class RobotTouchTestView(
             put("actual_touch_y", touchY ?: JSONObject.NULL)
             put("inside_target", hit)
             put("result", result)
+            put("target_already_completed", targetAlreadyCompleted)
             put("distance_to_center", distance ?: JSONObject.NULL)
             put("response_time_ms", responseMs)
-            put("previous_attempts_in_session", completedTargetIds.size)
+            put("previous_attempts_in_session", hits + misses - 1)
             put("timed_out", false)
             put("configuration", config.toJson())
+            put("imu", imu.snapshot())
         })
+    }
 
-        if (hit || noTouch) {
-            completedTargetIds += target.id
-            showNext()
-        } else {
-            current = target
-            awaitingManualAdvance = true
-            onOperatorAction("Continue after miss", true)
-            invalidate()
-        }
+    private fun finishSession() {
+        if (finished) return
+        finished = true
+        current = null
+        onOperatorAction("", false)
+        onFinished(SessionResult(
+            sessionId, targets.size, hits, misses,
+            if (hits + misses == 0) 0 else totalResponseMs / (hits + misses),
+        ))
     }
 
     private fun nearestRemainingTarget(x: Float, y: Float): CircleTarget =

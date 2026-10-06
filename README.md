@@ -1,10 +1,10 @@
 # Robot Touch Test
 
-An Android application for repeatable touch-accuracy experiments. Every batch displays one or more complete red, green, and blue target trios at the same time. The white outline marks the target currently expected from the robot.
+An Android application for repeatable touch-accuracy experiments. Every batch displays one or more complete red, green, and blue target trios at the same time.
 
 The app opens directly in a fixed-position test by default. Use **Settings** to choose the number of RGB trios, switch between fixed and random positions, independently enable random sizes, and set the radius range.
 
-There is no automatic timeout. Every remaining target can be touched in any order. A registered Android touch is recorded as a hit or miss. After a miss, use **Continue after miss** to skip that target. If the robot never produces an Android touch, use **No touch / next**; the app records `result: "no_touch"`, null touch coordinates, and `timed_out: false`. The target layout remains on screen for the whole batch so the DENSO vision node can observe the complete RGB trio.
+There is no automatic timeout or touch-attempt limit. Every remaining target can be touched in any order. A touch outside a target records a miss and leaves every target active, so the robot can keep trying. Repeated touches on an already completed target are also recorded, with `target_already_completed: true`, without consuming another target. The batch finishes automatically only after every target has been hit. Press **Continue after miss** to finish a batch earlier; every remaining target is then stored as `result: "no_touch"`. The target layout remains on screen for the whole batch so the DENSO vision node can observe the complete RGB trio.
 
 ## Run
 
@@ -35,9 +35,10 @@ Each record contains:
 - `screen_width` and `screen_height` in pixels
 - `target_id`, center coordinates, radius in pixels and dp, diameter in pixels, and target color
 - actual touch coordinates
-- `inside_target`, `result`, `distance_to_center`, `response_time_ms`, and `timed_out`
+- `inside_target`, `result`, `target_already_completed`, `distance_to_center`, `response_time_ms`, and `timed_out`
 - `previous_attempts_in_session`
 - `configuration`, a complete nested snapshot of the settings used for the test
+- `imu`, the latest phone accelerometer (m/s²), gyroscope (rad/s), and orientation (degrees) sample captured with the event; an unavailable sensor is stored as `null`
 
 Files exported by the JSON action can be imported again. Existing records with the same `event_id` are not duplicated. Deleting sessions and clearing all data require confirmation.
 
