@@ -49,18 +49,32 @@ class MainActivity : Activity() {
         val saved = configStore.load()
         val layout = column()
         layout.addView(title("Settings"))
+        val captcha = toggle(layout, "CAPTCHA test (Google test widget)", saved.captchaEnabled)
+        val captchaFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val captchaCount = field(captchaFields, "CAPTCHA checkboxes per spawn", saved.captchaCount.toString(), false)
+        captchaFields.addView(body("Default: 1 checkbox. Internet required. Official test keys skip image challenges. Checkbox size is controlled by Google."))
+        layout.addView(captchaFields)
         val fixedPosition = toggle(layout, "Fixed target positions", !saved.randomPosition)
         val randomPosition = toggle(layout, "Random target positions", saved.randomPosition)
         val randomSize = toggle(layout, "Random target sizes", saved.randomSize)
-        val trios = field(layout, "RGB trios per spawn", saved.triosPerSpawn.toString(), false)
+        val circleFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val trios = field(circleFields, "RGB trios per spawn", saved.triosPerSpawn.toString(), false)
         val fixedRadiusFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val fixedRadius = field(fixedRadiusFields, "Target radius (dp)", saved.maxRadiusDp.clean(), true)
         fixedRadiusFields.addView(body("Default value: ${TestConfig().maxRadiusDp.clean()} dp"))
-        layout.addView(fixedRadiusFields)
+        circleFields.addView(fixedRadiusFields)
         val randomRadiusFields = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val minRadius = field(randomRadiusFields, "Minimum target radius (dp)", saved.minRadiusDp.clean(), true)
         val maxRadius = field(randomRadiusFields, "Maximum target radius (dp)", saved.maxRadiusDp.clean(), true)
-        layout.addView(randomRadiusFields)
+        circleFields.addView(randomRadiusFields)
+        layout.addView(circleFields)
+        fun showModeFields(enabled: Boolean) {
+            captchaFields.visibility = if (enabled) View.VISIBLE else View.GONE
+            circleFields.visibility = if (enabled) View.GONE else View.VISIBLE
+            randomSize.visibility = if (enabled) View.GONE else View.VISIBLE
+        }
+        showModeFields(saved.captchaEnabled)
+        captcha.setOnCheckedChangeListener { _, checked -> showModeFields(checked) }
         fun showRadiusFields(random: Boolean) {
             fixedRadiusFields.visibility = if (random) View.GONE else View.VISIBLE
             randomRadiusFields.visibility = if (random) View.VISIBLE else View.GONE
@@ -76,13 +90,15 @@ class MainActivity : Activity() {
 
         fun readConfig(): TestConfig? {
             val config = runCatching {
-                val radius = fixedRadius.text.toString().toFloat()
+                val radius = if (captcha.isChecked) saved.maxRadiusDp else fixedRadius.text.toString().toFloat()
                 TestConfig(
-                    targetCount = Math.multiplyExact(trios.text.toString().toInt(), 3),
-                    minRadiusDp = if (randomSize.isChecked) minRadius.text.toString().toFloat() else radius,
-                    maxRadiusDp = if (randomSize.isChecked) maxRadius.text.toString().toFloat() else radius,
+                    targetCount = if (captcha.isChecked) saved.targetCount else Math.multiplyExact(trios.text.toString().toInt(), 3),
+                    minRadiusDp = if (captcha.isChecked) saved.minRadiusDp else if (randomSize.isChecked) minRadius.text.toString().toFloat() else radius,
+                    maxRadiusDp = if (captcha.isChecked) saved.maxRadiusDp else if (randomSize.isChecked) maxRadius.text.toString().toFloat() else radius,
                     randomPosition = randomPosition.isChecked,
                     randomSize = randomSize.isChecked,
+                    captchaEnabled = captcha.isChecked,
+                    captchaCount = if (captcha.isChecked) captchaCount.text.toString().toInt() else saved.captchaCount,
                 )
             }.getOrElse {
                 message("Invalid settings", "Enter a valid number in every numeric field.")
@@ -106,7 +122,7 @@ class MainActivity : Activity() {
     private fun startTest(config: TestConfig) {
         val error = config.error() ?: runCatching {
             val metrics = resources.displayMetrics
-            TouchTestLogic.generateTargets(config, metrics.widthPixels, metrics.heightPixels, metrics.density, 136 * metrics.density, metrics.heightPixels - 24 * metrics.density)
+            TouchTestLogic.generateTargets(config, metrics.widthPixels, metrics.heightPixels, metrics.density, 120 * metrics.density, metrics.heightPixels - 96 * metrics.density)
         }.exceptionOrNull()?.message
         if (error != null) return message("Cannot start test", error)
         screen = Screen.TEST
@@ -154,10 +170,13 @@ class MainActivity : Activity() {
                 "Accuracy: ${percent(hits, records.size)}\nAverage touch error: ${average(distances)} px\n" +
                 "Average response time: ${if (responses.isEmpty()) "0" else responses.average().roundToInt()} ms"
         ))
-        layout.addView(section("By target size", grouped(records) { "${it.optDouble("target_radius_dp").roundToInt()} dp" }))
+        layout.addView(section("By target size", grouped(records) {
+            if (it.optString("target_shape") == "square") "${(it.optDouble("target_radius_dp") * 2).roundToInt()} dp checkbox side"
+            else "${it.optDouble("target_radius_dp").roundToInt()} dp circle radius"
+        }))
         layout.addView(section("By test mode", grouped(records) { it.optString("test_mode", "Unknown") }))
         layout.addView(section("By target position", grouped(records, ::positionName)))
-        layout.addView(label("Touch tendency (green = hit, red = miss)"))
+        layout.addView(label("Touch tendency (green = hit, red = miss; outlines show target shapes)"))
         layout.addView(TouchMapView(this, records))
         layout.addView(label("Previous test sessions"))
         sessions.entries.sortedByDescending { it.value.firstOrNull()?.optString("date_time") }.forEach { (id, rows) ->
@@ -306,7 +325,8 @@ private class TouchMapView(context: android.content.Context, private val records
         val cy = height / 2f
         val referenceRadius = minOf(width, height) * .23f
         paint.style = Paint.Style.STROKE; paint.strokeWidth = 2 * density; paint.color = Color.DKGRAY
-        canvas.drawCircle(cx, cy, referenceRadius, paint)
+        if (records.any { it.optString("target_shape") != "square" }) canvas.drawCircle(cx, cy, referenceRadius, paint)
+        if (records.any { it.optString("target_shape") == "square" }) canvas.drawRect(cx - referenceRadius, cy - referenceRadius, cx + referenceRadius, cy + referenceRadius, paint)
         canvas.drawLine(cx - referenceRadius * 1.5f, cy, cx + referenceRadius * 1.5f, cy, paint)
         canvas.drawLine(cx, cy - referenceRadius * 1.5f, cx, cy + referenceRadius * 1.5f, paint)
         paint.style = Paint.Style.FILL
