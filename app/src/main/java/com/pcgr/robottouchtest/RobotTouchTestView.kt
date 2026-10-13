@@ -50,6 +50,7 @@ class RobotTouchTestView(
     private data class CaptchaTouch(val target: CircleTarget, val x: Float, val y: Float, val responseMs: Long)
     private var pendingCaptchaTouch: CaptchaTouch? = null
     private var captchaFailed = false
+    private val finishAfterCaptchaAnimation = Runnable { finishSession() }
 
     init {
         isFocusable = true
@@ -63,6 +64,7 @@ class RobotTouchTestView(
     }
 
     override fun onDetachedFromWindow() {
+        removeCallbacks(finishAfterCaptchaAnimation)
         imu.stop()
         super.onDetachedFromWindow()
     }
@@ -181,7 +183,15 @@ class RobotTouchTestView(
     private fun showNext() {
         if (config.captchaEnabled) previousResult = if (completedTargetIds.isEmpty()) "Tap the checkbox" else previousResult
         if (completedTargetIds.size >= targets.size) {
-            finishSession()
+            current = null
+            onOperatorAction("", false)
+            if (config.captchaEnabled) {
+                previousResult = "Checkbox verified"
+                invalidate()
+                postDelayed(finishAfterCaptchaAnimation, CAPTCHA_ANIMATION_DISPLAY_MS)
+            } else {
+                finishSession()
+            }
             return
         }
         current = targets.first { it.id !in completedTargetIds }
@@ -306,5 +316,9 @@ class RobotTouchTestView(
         textSize = textSizeSp * resources.displayMetrics.scaledDensity
         textAlign = Paint.Align.CENTER
         typeface = android.graphics.Typeface.create("sans", android.graphics.Typeface.BOLD)
+    }
+
+    companion object {
+        private const val CAPTCHA_ANIMATION_DISPLAY_MS = 6_000L
     }
 }

@@ -135,7 +135,9 @@ class MainActivity : Activity() {
         if (error != null) return message("Cannot start test", error)
         screen = Screen.TEST
         lateinit var operatorButton: Button
-        val test = RobotTouchTestView(this, config, ::showFinalSummary) { label, enabled ->
+        val test = RobotTouchTestView(this, config, { result ->
+            if (config.captchaEnabled) startTest(config) else showFinalSummary(result)
+        }) { label, enabled ->
             operatorButton.text = label
             operatorButton.isEnabled = enabled
             operatorButton.visibility = if (enabled) View.VISIBLE else View.GONE

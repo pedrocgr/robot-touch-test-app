@@ -76,12 +76,58 @@ class RecaptchaView(
             }
         }
         var ignoreGesture = false
-        setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) ignoreGesture = blocked() || failed
-            if (!ignoreGesture && event.actionMasked == MotionEvent.ACTION_UP && touched(event.x, event.y + topOffset)) {
-                postDelayed(timeout, 30_000)
+        var cappedGesture = false
+        var dispatchingSyntheticUp = false
+        var gestureDownTime = 0L
+        var gestureX = 0f
+        var gestureY = 0f
+        val releaseHeldTouch = Runnable {
+            if (ignoreGesture || cappedGesture || failed) return@Runnable
+
+            cappedGesture = true
+            if (touched(gestureX, gestureY + topOffset)) {
+                postDelayed(timeout, VERIFY_TIMEOUT_MS)
             }
-            ignoreGesture
+
+            // A robot can keep the screen pressed for much longer than a
+            // normal finger tap. End the gesture seen by the iframe while
+            // consuming the later physical release, so reCAPTCHA receives
+            // one ordinary click instead of a long press.
+            val syntheticUp = MotionEvent.obtain(
+                gestureDownTime,
+                android.os.SystemClock.uptimeMillis(),
+                MotionEvent.ACTION_UP,
+                gestureX,
+                gestureY,
+                0,
+            )
+            dispatchingSyntheticUp = true
+            dispatchTouchEvent(syntheticUp)
+            dispatchingSyntheticUp = false
+            syntheticUp.recycle()
+        }
+        setOnTouchListener { _, event ->
+            if (dispatchingSyntheticUp) return@setOnTouchListener false
+
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    removeCallbacks(releaseHeldTouch)
+                    ignoreGesture = blocked() || failed
+                    cappedGesture = false
+                    gestureDownTime = event.downTime
+                    gestureX = event.x
+                    gestureY = event.y
+                    if (!ignoreGesture) postDelayed(releaseHeldTouch, CAPTCHA_TAP_DURATION_MS)
+                }
+                MotionEvent.ACTION_UP -> {
+                    removeCallbacks(releaseHeldTouch)
+                    if (!ignoreGesture && !cappedGesture && touched(event.x, event.y + topOffset)) {
+                        postDelayed(timeout, VERIFY_TIMEOUT_MS)
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> removeCallbacks(releaseHeldTouch)
+            }
+            ignoreGesture || cappedGesture
         }
         loadDataWithBaseURL("https://robot-touch-test.example/", """
             <!doctype html><html lang="en"><head>
@@ -119,7 +165,7 @@ class RecaptchaView(
                 onerror="console.log('robot-captcha:error:script')"></script>
             </head><body></body></html>
         """.trimIndent(), "text/html", "UTF-8", null)
-        postDelayed(timeout, 30_000)
+        postDelayed(timeout, VERIFY_TIMEOUT_MS)
     }
 
     private fun fail(message: String) {
@@ -135,5 +181,10 @@ class RecaptchaView(
         stopLoading()
         super.onDetachedFromWindow()
         destroy()
+    }
+
+    companion object {
+        private const val CAPTCHA_TAP_DURATION_MS = 150L
+        private const val VERIFY_TIMEOUT_MS = 30_000L
     }
 }
