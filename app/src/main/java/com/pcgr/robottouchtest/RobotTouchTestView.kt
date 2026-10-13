@@ -230,15 +230,19 @@ class RobotTouchTestView(
             else -> "miss"
         }
         touchAttempts++
-        if (hit) {
+        if (config.captchaEnabled) {
+            previousResult = "Tap the checkbox"
+        } else if (hit) {
             previousResult = if (targetAlreadyCompleted) {
                 "Previous touch: REPEATED HIT"
             } else {
                 "Previous touch: HIT"
             }
-            performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
         } else {
             previousResult = if (noTouch) "Previous target: NO TOUCH" else "Previous touch: MISS"
+        }
+        if (hit) {
+            performHapticFeedback(if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY)
         }
         record(target, touchX, touchY, result, targetAlreadyCompleted, responseMs)
         contentDescription = previousResult
