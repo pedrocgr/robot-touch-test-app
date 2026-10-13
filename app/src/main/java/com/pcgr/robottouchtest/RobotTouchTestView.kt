@@ -34,7 +34,7 @@ class RobotTouchTestView(
     private val sessionId = UUID.randomUUID().toString()
     private val testId = UUID.randomUUID().toString()
     private val textPaint = paint(Color.rgb(24, 33, 45), 18f)
-    private val statusPaint = paint(Color.rgb(21, 101, 192), 16f)
+    private val statusPaint = paint(Color.rgb(80, 80, 80), 16f)
     private val targetPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var targets = emptyList<CircleTarget>()
     private val completedTargetIds = mutableSetOf<String>()
@@ -70,7 +70,14 @@ class RobotTouchTestView(
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         if (targets.isNotEmpty() || width == 0 || height == 0) return
         targets = runCatching {
-            TouchTestLogic.generateTargets(config, width, height, density, 120 * density, height - 96 * density)
+            TouchTestLogic.generateTargets(
+                config,
+                width,
+                height,
+                density,
+                TouchTestLogic.TARGET_TOP_DP * density,
+                height - TouchTestLogic.TARGET_BOTTOM_RESERVED_DP * density,
+            )
         }.getOrElse { error ->
             previousResult = "Targets do not fit"
             contentDescription = previousResult
@@ -81,7 +88,7 @@ class RobotTouchTestView(
         if (config.captchaEnabled) {
             previousResult = "Loading reCAPTCHA..."
             onOperatorAction("", false)
-            addView(RecaptchaView(context, targets, 120 * density,
+            addView(RecaptchaView(context, targets, TouchTestLogic.TARGET_TOP_DP * density,
                 onReady = ::showNext,
                 onVerified = { id ->
                     val touch = pendingCaptchaTouch
@@ -103,8 +110,11 @@ class RobotTouchTestView(
                     current == null || pendingCaptchaTouch != null || captchaFailed
                 },
                 touched = ::captchaTouch,
-            ), LayoutParams(LayoutParams.MATCH_PARENT, height - (120 * density).toInt()).apply {
-                topMargin = (120 * density).toInt()
+            ), LayoutParams(
+                LayoutParams.MATCH_PARENT,
+                height - (TouchTestLogic.TARGET_TOP_DP * density).toInt(),
+            ).apply {
+                topMargin = (TouchTestLogic.TARGET_TOP_DP * density).toInt()
             })
         } else showNext()
     }

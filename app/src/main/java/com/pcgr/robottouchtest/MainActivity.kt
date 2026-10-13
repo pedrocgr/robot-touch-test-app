@@ -122,7 +122,15 @@ class MainActivity : Activity() {
     private fun startTest(config: TestConfig) {
         val error = config.error() ?: runCatching {
             val metrics = resources.displayMetrics
-            TouchTestLogic.generateTargets(config, metrics.widthPixels, metrics.heightPixels, metrics.density, 120 * metrics.density, metrics.heightPixels - 96 * metrics.density)
+            TouchTestLogic.generateTargets(
+                config,
+                metrics.widthPixels,
+                metrics.heightPixels,
+                metrics.density,
+                TouchTestLogic.TARGET_TOP_DP * metrics.density,
+                metrics.heightPixels -
+                    TouchTestLogic.TARGET_BOTTOM_RESERVED_DP * metrics.density,
+            )
         }.exceptionOrNull()?.message
         if (error != null) return message("Cannot start test", error)
         screen = Screen.TEST

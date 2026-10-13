@@ -92,6 +92,8 @@ data class CircleTarget(
 )
 
 object TouchTestLogic {
+    const val TARGET_TOP_DP = 120f
+    const val TARGET_BOTTOM_RESERVED_DP = 176f
     // shortcut: regular Google widget offsets; recheck bounds if its layout changes.
     const val CAPTCHA_CHECKBOX_X_DP = 27f
     const val CAPTCHA_CHECKBOX_Y_DP = 37f
