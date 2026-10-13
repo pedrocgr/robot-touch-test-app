@@ -1,10 +1,22 @@
 # Robot Touch Test
 
-An Android application for repeatable touch-accuracy experiments. Every batch displays one or more complete red, green, and blue target trios at the same time. The white outline marks the target currently expected from the robot.
+An Android application for repeatable touch-accuracy experiments. The default circle mode displays one or more complete red, green, and blue target trios at the same time. An optional CAPTCHA mode displays Google's original reCAPTCHA v2 test widgets instead.
 
 The app opens directly in a fixed-position test by default. Use **Settings** to choose the number of RGB trios, switch between fixed and random positions, independently enable random sizes, and set the radius range.
 
 There is no automatic timeout. Every remaining target can be touched in any order. A registered Android touch is recorded as a hit or miss. After a miss, use **Continue after miss** to skip that target. If the robot never produces an Android touch, use **No touch / next**; the app records `result: "no_touch"`, null touch coordinates, and `timed_out: false`. The target layout remains on screen for the whole batch so the DENSO vision node can observe the complete RGB trio.
+
+## CAPTCHA demo
+
+In **Settings**, enable **CAPTCHA test (Google test widget)**, then **Save and Start Test**. **CAPTCHA checkboxes per spawn** defaults to **1**; fixed or random positions are supported. Circle settings are retained when switching modes. Google controls the normal widget's size; batches are scaled down only when necessary to fit and rejected if they would become too small.
+
+This uses the [official public reCAPTCHA v2 test key](https://developers.google.com/recaptcha/docs/faq#id-like-to-run-automated-tests-with-recaptcha-what-should-i-do), not a locally drawn imitation. It requires internet, shows Google's test warning, and skips traffic-light/bicycle/image challenges. It is only a demo, not a production anti-bot check. Google resources are loaded in a WebView and can use cookies.
+
+Only a touch inside the square followed by the widget's verification callback counts as a hit. The recorded response time ends at the actual touch, not at the later network callback. Misses, manual advancement, session summaries, and JSON/CSV exports reuse the circle-test flow. Loading or verification failures show an error; a 30-second network watchdog prevents indefinite waiting and does not create a false touch/miss record.
+
+CAPTCHA records include `target_shape: "square"`, `captcha_verified`, and the CAPTCHA settings/provider. For squares, the legacy `target_radius` / `target_radius_dp` fields mean **half the side length**, and `target_diameter` means the full side length. Existing circle records remain compatible; do not pool CAPTCHA records into circle-radius accuracy analyses.
+
+The checkbox bounds assume Google's current regular widget layout. Recheck them if Google changes it. **The existing ROS RGB-circle detector is not changed by this app feature**; detecting CAPTCHA checkboxes with the robot camera is a separate integration step.
 
 ## Run
 
@@ -18,6 +30,8 @@ From a terminal with the Android SDK configured:
 ```bash
 ./gradlew installDebug
 ```
+
+If an APK built on another computer has a different debug signing key, Android may reject an in-place update. **Export the saved results before any uninstall**, since uninstalling deletes the app-private data. Building with the original signing key preserves update compatibility.
 
 ## Saved data
 
@@ -34,7 +48,7 @@ Each record contains:
 - `event_id`, `session_id`, `test_id`, `date_time`, and `test_mode`
 - `screen_width` and `screen_height` in pixels
 - `target_id`, center coordinates, radius in pixels and dp, diameter in pixels, and target color
-- actual touch coordinates
+- `target_shape` (`circle` or `square`), `captcha_verified` for CAPTCHA attempts, and actual touch coordinates
 - `inside_target`, `result`, `distance_to_center`, `response_time_ms`, and `timed_out`
 - `previous_attempts_in_session`
 - `configuration`, a complete nested snapshot of the settings used for the test
@@ -43,4 +57,4 @@ Files exported by the JSON action can be imported again. Existing records with t
 
 ## Built-in validation check
 
-At startup, a small self-check verifies RGB trio counts, radius ranges, non-overlapping target placement, screen bounds, and hit/miss calculation.
+At startup, a small self-check verifies RGB trio counts, radius ranges, non-overlapping target placement, screen bounds, circle/square hit calculation, CAPTCHA count limits/defaults, configuration round trips, widget placement, and rejection of layouts that do not fit.

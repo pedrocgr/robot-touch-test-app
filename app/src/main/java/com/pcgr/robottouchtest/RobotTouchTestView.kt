@@ -8,8 +8,9 @@ import android.os.Build
 import android.os.SystemClock
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
-import android.view.View
 import android.view.accessibility.AccessibilityEvent
+import android.widget.FrameLayout
+import android.widget.Toast
 import org.json.JSONObject
 import java.util.UUID
 
@@ -18,7 +19,7 @@ class RobotTouchTestView(
     private val config: TestConfig,
     private val onFinished: (SessionResult) -> Unit,
     private val onOperatorAction: (label: String, enabled: Boolean) -> Unit,
-) : View(context) {
+) : FrameLayout(context) {
     data class SessionResult(
         val sessionId: String,
         val targetCount: Int,
@@ -45,18 +46,54 @@ class RobotTouchTestView(
     private var finished = false
     private var awaitingManualAdvance = false
     private var pressedTarget: CircleTarget? = null
+    private data class CaptchaTouch(val target: CircleTarget, val x: Float, val y: Float, val responseMs: Long)
+    private var pendingCaptchaTouch: CaptchaTouch? = null
+    private var captchaFailed = false
 
     init {
         isFocusable = true
         contentDescription = "Robot touch test area"
+        setWillNotDraw(false)
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         if (targets.isNotEmpty() || width == 0 || height == 0) return
-        targets = TouchTestLogic.generateTargets(
-            config, width, height, density, 120 * density, height - 96 * density,
-        )
-        showNext()
+        targets = runCatching {
+            TouchTestLogic.generateTargets(config, width, height, density, 120 * density, height - 96 * density)
+        }.getOrElse { error ->
+            previousResult = "Targets do not fit"
+            contentDescription = previousResult
+            onOperatorAction("", false)
+            Toast.makeText(context, error.message, Toast.LENGTH_LONG).show()
+            return
+        }
+        if (config.captchaEnabled) {
+            previousResult = "Loading reCAPTCHA..."
+            onOperatorAction("", false)
+            addView(RecaptchaView(context, targets, 120 * density,
+                onReady = ::showNext,
+                onVerified = { id ->
+                    val touch = pendingCaptchaTouch
+                    if (touch != null && touch.target.id == id && !captchaFailed) {
+                        pendingCaptchaTouch = null
+                        complete(touch.target, touch.x, touch.y, noTouch = false, responseMs = touch.responseMs)
+                    }
+                },
+                onError = { message ->
+                    captchaFailed = true
+                    pendingCaptchaTouch = null
+                    previousResult = "reCAPTCHA unavailable"
+                    contentDescription = previousResult
+                    onOperatorAction("", false)
+                    invalidate()
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                },
+                blocked = { current == null || awaitingManualAdvance || pendingCaptchaTouch != null || captchaFailed },
+                touched = ::captchaTouch,
+            ), LayoutParams(LayoutParams.MATCH_PARENT, height - (120 * density).toInt()).apply {
+                topMargin = (120 * density).toInt()
+            })
+        } else showNext()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -65,7 +102,7 @@ class RobotTouchTestView(
         val progress = if (finished) targets.size else completedTargetIds.size + 1
         canvas.drawText("Target $progress of ${targets.size}", width / 2f, 40 * density, textPaint)
         canvas.drawText(previousResult, width / 2f, 72 * density, statusPaint)
-        targets.forEach { circle ->
+        targets.filterNot { it.isSquare }.forEach { circle ->
             targetPaint.color = circle.color
             targetPaint.alpha = if (circle === pressedTarget) 170 else 255
             canvas.drawCircle(circle.x, circle.y, circle.radius, targetPaint)
@@ -73,6 +110,7 @@ class RobotTouchTestView(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (config.captchaEnabled) return true
         val target = current ?: return true
         if (awaitingManualAdvance) return true
         when (event.actionMasked) {
@@ -107,6 +145,7 @@ class RobotTouchTestView(
 
     /** Called by the operator button outside the test surface. */
     fun operatorAdvance() {
+        if (pendingCaptchaTouch != null || captchaFailed) return
         val target = current ?: return
         if (awaitingManualAdvance) {
             awaitingManualAdvance = false
@@ -118,6 +157,7 @@ class RobotTouchTestView(
     }
 
     private fun showNext() {
+        if (config.captchaEnabled) previousResult = if (completedTargetIds.isEmpty()) "Tap the checkbox" else previousResult
         if (completedTargetIds.size >= targets.size) {
             finished = true
             current = null
@@ -135,11 +175,26 @@ class RobotTouchTestView(
         sendAccessibilityEvent(AccessibilityEvent.TYPE_ANNOUNCEMENT)
     }
 
-    private fun complete(target: CircleTarget, touchX: Float?, touchY: Float?, noTouch: Boolean) {
+    private fun captchaTouch(x: Float, y: Float): Boolean {
+        if (current == null || awaitingManualAdvance || pendingCaptchaTouch != null || captchaFailed) return false
+        val target = targets.firstOrNull { it.id !in completedTargetIds && TouchTestLogic.isHit(it, x, y) }
+        if (target == null) {
+            complete(nearestRemainingTarget(x, y), x, y, noTouch = false)
+            return false
+        } else {
+            pendingCaptchaTouch = CaptchaTouch(target, x, y, SystemClock.elapsedRealtime() - appearedAt)
+            onOperatorAction("", false)
+            previousResult = "Verifying checkbox..."
+            invalidate()
+            return true
+        }
+    }
+
+    private fun complete(target: CircleTarget, touchX: Float?, touchY: Float?, noTouch: Boolean,
+        responseMs: Long = SystemClock.elapsedRealtime() - appearedAt) {
         if (target.id in completedTargetIds || finished) return
-        val responseMs = SystemClock.elapsedRealtime() - appearedAt
         val distance = if (touchX == null || touchY == null) null else TouchTestLogic.distance(target, touchX, touchY)
-        val hit = distance != null && distance <= target.radius
+        val hit = touchX != null && touchY != null && TouchTestLogic.isHit(target, touchX, touchY)
         val result = when {
             hit -> "hit"
             noTouch -> "no_touch"
@@ -170,6 +225,8 @@ class RobotTouchTestView(
             put("target_radius_dp", target.radiusDp)
             put("target_diameter", target.radius * 2)
             put("target_color", String.format("#%08X", target.color))
+            put("target_shape", if (target.isSquare) "square" else "circle")
+            if (target.isSquare) put("captcha_verified", hit)
             put("actual_touch_x", touchX ?: JSONObject.NULL)
             put("actual_touch_y", touchY ?: JSONObject.NULL)
             put("inside_target", hit)

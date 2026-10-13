@@ -19,9 +19,13 @@ data class TestConfig(
     val maxRadiusDp: Float = 48f,
     val randomPosition: Boolean = false,
     val randomSize: Boolean = false,
+    val captchaEnabled: Boolean = false,
+    val captchaCount: Int = 1,
 ) {
     val triosPerSpawn get() = targetCount / 3
+    val spawnCount get() = if (captchaEnabled) captchaCount else targetCount
     val modeLabel get() = when {
+        captchaEnabled -> if (randomPosition) "CAPTCHA with random positions" else "CAPTCHA with fixed positions"
         randomPosition && randomSize -> "Random positions and sizes"
         randomPosition -> "Random target positions"
         randomSize -> "Fixed positions with random sizes"
@@ -29,6 +33,7 @@ data class TestConfig(
     }
 
     fun error(): String? = when {
+        captchaCount !in 1..9 -> "CAPTCHA checkboxes per spawn must be between 1 and 9."
         targetCount < 3 || targetCount % 3 != 0 -> "RGB trios per spawn must be at least 1."
         targetCount > 300 -> "RGB trios per spawn cannot exceed 100."
         !minRadiusDp.isFinite() || !maxRadiusDp.isFinite() -> "Target radii must be finite numbers."
@@ -40,11 +45,14 @@ data class TestConfig(
     fun toJson() = JSONObject().apply {
         put("test_mode", modeLabel)
         put("rgb_trios_per_spawn", triosPerSpawn)
-        put("target_count", targetCount)
+        put("target_count", spawnCount)
         put("minimum_radius_dp", minRadiusDp)
         put("maximum_radius_dp", maxRadiusDp)
         put("random_position", randomPosition)
         put("random_target_size", randomSize)
+        put("captcha_enabled", captchaEnabled)
+        put("captcha_checkboxes_per_spawn", captchaCount)
+        if (captchaEnabled) put("captcha_provider", "google_recaptcha_v2_test")
     }
 
     companion object {
@@ -56,6 +64,8 @@ data class TestConfig(
                 maxRadiusDp = json.optDouble("maximum_radius_dp", 48.0).toFloat(),
                 randomPosition = json.optBoolean("random_position") || oldMode == "RANDOM_POSITION",
                 randomSize = json.optBoolean("random_target_size") || oldMode == "RANDOM_SIZE",
+                captchaEnabled = json.optBoolean("captcha_enabled"),
+                captchaCount = json.optInt("captcha_checkboxes_per_spawn", 1),
             )
         }
     }
@@ -78,9 +88,13 @@ data class CircleTarget(
     val radius: Float,
     val radiusDp: Float,
     val color: Int,
+    val isSquare: Boolean = false,
 )
 
 object TouchTestLogic {
+    // shortcut: regular Google widget offsets; recheck bounds if its layout changes.
+    const val CAPTCHA_CHECKBOX_X_DP = 27f
+    const val CAPTCHA_CHECKBOX_Y_DP = 37f
     private val colors = intArrayOf(
         Color.rgb(229, 57, 53), Color.rgb(67, 160, 71), Color.rgb(30, 136, 229),
     )
@@ -96,6 +110,7 @@ object TouchTestLogic {
         random: Random = Random.Default,
     ): List<CircleTarget> {
         require(config.error() == null) { config.error()!! }
+        if (config.captchaEnabled) return generateCaptchaTargets(config, width, density, top, bottom, random)
         val availableHeight = bottom - top
         val columns = if (config.randomPosition) {
             kotlin.math.ceil(kotlin.math.sqrt(config.targetCount * width / availableHeight)).toInt().coerceIn(1, config.targetCount)
@@ -129,7 +144,27 @@ object TouchTestLogic {
     }
 
     fun distance(target: CircleTarget, x: Float, y: Float) = hypot(x - target.x, y - target.y)
-    fun isHit(target: CircleTarget, x: Float, y: Float) = distance(target, x, y) <= target.radius
+    fun isHit(target: CircleTarget, x: Float, y: Float) = if (target.isSquare) {
+        kotlin.math.abs(x - target.x) <= target.radius && kotlin.math.abs(y - target.y) <= target.radius
+    } else distance(target, x, y) <= target.radius
+
+    private fun generateCaptchaTargets(
+        config: TestConfig, width: Int, density: Float, top: Float, bottom: Float, random: Random,
+    ): List<CircleTarget> {
+        val cellHeight = (bottom - top) / config.captchaCount
+        val scale = minOf(1f, width * .84f / (304f * density), cellHeight * .84f / (78f * density))
+        require(scale >= .5f) { "CAPTCHA widgets do not fit. Use fewer checkboxes per spawn." }
+        val cardWidth = 304 * density * scale
+        val cardHeight = 78 * density * scale
+        return List(config.captchaCount) { index ->
+            val cardLeft = if (config.randomPosition) random.nextFloat() * (width - cardWidth) else (width - cardWidth) / 2
+            val cardTop = top + index * cellHeight + if (config.randomPosition) {
+                random.nextFloat() * (cellHeight - cardHeight)
+            } else (cellHeight - cardHeight) / 2
+            CircleTarget("captcha-${index + 1}", cardLeft + CAPTCHA_CHECKBOX_X_DP * density * scale,
+                cardTop + CAPTCHA_CHECKBOX_Y_DP * density * scale, 14 * density * scale, 14 * scale, Color.DKGRAY, isSquare = true)
+        }
+    }
 
     fun selfCheck() {
         check(TestConfig(targetCount = 0).error() != null)
@@ -140,6 +175,24 @@ object TouchTestLogic {
         check(targets.indices.all { a -> (a + 1 until targets.size).all { b -> distance(targets[a], targets[b].x, targets[b].y) >= targets[a].radius + targets[b].radius } })
         check(isHit(targets.first(), targets.first().x, targets.first().y))
         check(!isHit(targets.first(), targets.first().x + targets.first().radius + 1, targets.first().y))
+        check(TestConfig(captchaCount = 0).error() != null)
+        check(TestConfig(captchaCount = 10).error() != null)
+        val captcha = TestConfig(captchaEnabled = true)
+        check(TestConfig.fromJson(captcha.toJson()) == captcha)
+        check(TestConfig.fromJson(JSONObject()).captchaCount == 1)
+        val square = generateTargets(captcha, 600, 800, 1f, 120f, 704f).single()
+        check(square.isSquare && square.radius == 14f)
+        check(isHit(square, square.x + 13f, square.y + 13f))
+        check(!isHit(square, square.x + 15f, square.y))
+        for (count in 1..9) {
+            val batch = generateTargets(captcha.copy(captchaCount = count, randomPosition = true), 600, 1600, 1f, 120f, 1504f, Random(9))
+            check(batch.size == count && batch.all { it.isSquare })
+            check(batch.all { it.x - CAPTCHA_CHECKBOX_X_DP * it.radius / 14 >= 0 &&
+                it.x + (304 - CAPTCHA_CHECKBOX_X_DP) * it.radius / 14 <= 600 &&
+                it.y - CAPTCHA_CHECKBOX_Y_DP * it.radius / 14 >= 120 &&
+                it.y + (78 - CAPTCHA_CHECKBOX_Y_DP) * it.radius / 14 <= 1504 })
+        }
+        check(runCatching { generateTargets(captcha.copy(captchaCount = 9), 320, 360, 1f, 120f, 264f) }.isFailure)
     }
 }
 
@@ -163,7 +216,8 @@ class TouchDataStore(context: Context) {
     fun exportCsv(): String {
         val fields = listOf(
             "event_id", "session_id", "test_id", "date_time", "test_mode", "screen_width", "screen_height",
-            "target_id", "target_center_x", "target_center_y", "target_radius", "target_radius_dp", "target_diameter", "target_color", "actual_touch_x",
+            "target_id", "target_center_x", "target_center_y", "target_radius", "target_radius_dp", "target_diameter", "target_color",
+            "target_shape", "captcha_verified", "actual_touch_x",
             "actual_touch_y", "inside_target", "result", "distance_to_center", "response_time_ms",
             "previous_attempts_in_session", "timed_out", "configuration",
         )
